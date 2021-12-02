@@ -1,0 +1,7 @@
+﻿"REF_DATE","GEO","DGUID","Value","North American Industry Classification System (NAICS)","UOM","UOM_ID","SCALAR_FACTOR","SCALAR_ID","VECTOR","COORDINATE","VALUE","STATUS","SYMBOL","TERMINATED","DECIMALS"
+"2018","British Columbia","2016A000259","Chained (2012) dollars","All industries [T001]","Dollars","81","millions","6","v62467264","10.2.1","246016.9","","","","1"
+"2018","British Columbia","2016A000259","Chained (2012) dollars","Construction [23]","Dollars","81","millions","6","v62467310","10.2.47","20294.2","","","","1"
+"2018","British Columbia","2016A000259","Chained (2012) dollars","Manufacturing [31-33]","Dollars","81","millions","6","v62467321","10.2.58","16918.3","","","","1"
+"2018","British Columbia","2016A000259","Chained (2012) dollars","Other professional, scientific and technical services including scientific research and development [541B]","Dollars","81","millions","6","v62467505","10.2.242","4119.6","","","","1"
+
+

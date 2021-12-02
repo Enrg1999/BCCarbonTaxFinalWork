@@ -1,0 +1,945 @@
+---
+title: 'R Code'
+output:
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r Libraries Import}
+library(plyr)
+library(tidyverse)
+library(Synth)
+library(SCtools)
+library(data.table)
+library(bit64)
+library(zoo)
+library(readxl)
+```
+
+# Data Preparation
+
+We start by creating BC's dataset.
+```{r BC data preparation}
+#We import all of the datasets that will be needed to compute BC's dependent variable and predictors
+
+dataBCCO2 <-
+  fread("/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/StatCanBCCO2.csv")
+
+dataBCGDP <-
+  fread("/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/StatCanBCGDP.csv")
+
+dataBCGDPPre1997 <-
+  fread(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/StatCanBCGDPPre.csv"
+  )
+
+dataBCGDP2018 <-
+  fread(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/StatCanBCGDP2018.csv"
+  )
+
+dataBCCPI <-
+  fread("/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/StatCanBCCPI.csv")
+
+dataBCPopulation <-
+  fread(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/StatCanBCPopulation.csv"
+  )
+
+dataBCEnergyProduction <-
+  fread(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/StatCanBCEnergyProduction.csv"
+  )
+
+dataBCEnergyProductionPre <-
+  fread(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/StatCanBCEnergyProductionPre.csv"
+  )
+
+year_quarter <-
+  c(
+    "1991-01",
+    "1992-01",
+    "1993-01",
+    "1994-01",
+    "1995-01",
+    "1996-01",
+    "1997-01",
+    "1998-01",
+    "1999-01",
+    "2000-01" ,
+    "2001-01",
+    "2002-01",
+    "2003-01",
+    "2004-01",
+    "2005-01",
+    "2006-01",
+    "2007-01",
+    "2008-01",
+    "2009-01",
+    "2010-01",
+    "2011-01",
+    "2012-01",
+    "2013-01",
+    "2014-01",
+    "2015-01",
+    "2016-01",
+    "2017-01",
+    "2018-01",
+    "2019-01"
+  )
+
+#We filter the population dataset so that it only includes annual values (note the population of each year is the one reported in the January of the next year)
+dataBCPopulation <-
+  dataBCPopulation[dataBCPopulation$REF_DATE %in% year_quarter]
+
+dataBCCO2$CO2eq <- as.numeric(dataBCCO2$CO2eq)
+
+factor <-
+  dataBCCPI$VALUE[dataBCCPI$REF_DATE == "2018"] / dataBCCPI$VALUE[dataBCCPI$REF_DATE ==
+                                                                    "2012"]
+
+#Since the BC's 2018 GDP is only available in 2012 dollars we convert it to 2018 ones (using the CPI)
+dataBCGDP2018$VALUE <- dataBCGDP2018$VALUE * factor
+
+#We now add it to the table containing BC's GDP values in current dollar
+dataBCGDP$VALUE[dataBCGDP$REF_DATE == "2018"] <- dataBCGDP2018$VALUE
+
+#We add to that table the pre-1997 values as those are in a different StatCan dataset
+dataBCGDP <- rbind(dataBCGDPPre1997, dataBCGDP)
+
+#We sort this complete BC's GDP table
+dataBCGDP <- arrange(dataBCGDP, REF_DATE)
+
+years <-
+  c(
+    "1990",
+    "1991",
+    "1992",
+    "1993",
+    "1994",
+    "1995",
+    "1996",
+    "1997",
+    "1998",
+    "1999",
+    "2000",
+    "2001",
+    "2002",
+    "2003",
+    "2004",
+    "2005",
+    "2006",
+    "2007",
+    "2008",
+    "2009",
+    "2010",
+    "2011",
+    "2012",
+    "2013",
+    "2014",
+    "2015",
+    "2016",
+    "2017",
+    "2018"
+  )
+
+#We convert the GDP values from current dollars to 2015 constant ones using the CPI
+for (i in 1:29) {
+ BCCPItemp <-
+  dataBCCPI$VALUE[dataBCCPI$REF_DATE == "2015"] / dataBCCPI$VALUE[dataBCCPI$REF_DATE ==
+                                                                      years[i]]
+  dataBCGDP$VALUE[dataBCGDP$REF_DATE == years[i]] <-
+   dataBCGDP$VALUE[dataBCGDP$REF_DATE == years[i]] * BCCPItemp
+}
+
+#We convert this result in 2015 USD
+dataBCGDP$VALUE <-
+ dataBCGDP$VALUE * (0.7819915613) 
+
+#We harmonize the categories identifier
+dataBCGDP$COORDINATE[dataBCGDP$COORDINATE == "10.1.17"] <- "10.1.47"
+
+dataBCGDP$COORDINATE[dataBCGDP$COORDINATE == "10.1.27"] <- "10.1.58"
+
+#We compute BC's manufacturing carbon intensity
+BCCarbonIntensity <-
+  ((dataBCCO2$CO2eq[dataBCCO2$Category == "Manufacturing Industries" &
+                      dataBCCO2$Region == "British Columbia" &
+                      dataBCCO2$Year > 1989 &
+                      dataBCCO2$Year < 2019] + dataBCCO2$CO2eq[dataBCCO2$Category == "Construction" &
+                                                                 dataBCCO2$Region == "British Columbia" &
+                                                                 dataBCCO2$Year > 1989 &
+                                                                 dataBCCO2$Year < 2019])) /
+  ((dataBCGDP$VALUE[dataBCGDP$COORDINATE ==
+                                                                                                                "10.1.58"] + dataBCGDP$VALUE[dataBCGDP$COORDINATE == "10.1.47"]))
+
+
+
+#We compute manufacturing GDP per capita
+BCSectorGDPPerCapita <-
+  ((dataBCGDP$VALUE[dataBCGDP$COORDINATE == "10.1.58"] + dataBCGDP$VALUE[dataBCGDP$COORDINATE ==
+                                                                           "10.1.47"])*1000) / dataBCPopulation$VALUE
+
+#We compute the share of manufacturing GDP
+BCShareOfSectorGDP <-
+  (dataBCGDP$VALUE[dataBCGDP$COORDINATE == "10.1.58"] + dataBCGDP$VALUE[dataBCGDP$COORDINATE ==
+                                                                          "10.1.47"]) * 100 / dataBCGDP$VALUE[dataBCGDP$COORDINATE == "10.1.1"]
+
+#We merge the two datasets containing the BC's energy demand broken up in sources
+dataBCEnergyProductionPre$REF_DATE <-
+  substr(dataBCEnergyProductionPre$REF_DATE,
+         start = 1,
+         stop = 4)
+
+dataBCEnergyProduction <- rbind(dataBCEnergyProductionPre, dataBCEnergyProduction)
+
+#We fill in NAs with 0s
+
+dataBCEnergyProduction$VALUE <- na.fill(dataBCEnergyProduction$VALUE, 0)
+
+#We compute the percentage of energy produced from low carbon sources
+
+BCShareOfLowCarbonEnergy <- rep(0, times = 29)
+for (i in 1:29) {
+  BCShareOfLowCarbonEnergy[i] <-
+    (sum(dataBCEnergyProduction$VALUE[dataBCEnergyProduction$`Fuel type` == "Primary electricity, hydro and nuclear" &
+                                 dataBCEnergyProduction$REF_DATE == 1989 + i])) * 100 / sum(dataBCEnergyProduction$VALUE[dataBCEnergyProduction$REF_DATE ==
+                                                                                                                                                                             1989 + i])
+}
+
+#We compute the expenditure on R&D as a percentage of BC's GDP (note this is available from 1997 onward)
+
+BCShareOfResearchOverGDP <-
+  (dataBCGDP$VALUE[dataBCGDP$COORDINATE == "10.1.242"]) * 100 / dataBCGDP$VALUE[dataBCGDP$COORDINATE ==
+                                                                                  "10.1.1" & dataBCGDP$REF_DATE > 1996]
+
+BCShareOfResearchOverGDP <- append(rep(NA, times = 7), BCShareOfResearchOverGDP)
+
+#We finally create the BC's dataframe containing all of the previously computed metrics for the province
+
+BC <-
+  data.frame(
+    rep("British Columbia", times = 29),
+    rep(1, times = 29),
+    c(1990:2018),
+    BCCarbonIntensity,
+    BCSectorGDPPerCapita,
+    BCShareOfSectorGDP,
+    BCShareOfLowCarbonEnergy,
+    BCShareOfResearchOverGDP
+  )
+
+dimnames(BC)[[2]] <-
+  c(
+    "Country",
+    "CountryNum",
+    "Year",
+    "CarbonIntensity",
+    "SectorGDPPerCapita",
+    "ShareOfSectorGDP",
+    "ShareOfLowCarbonEnergy",
+    "ShareOfResearchOverGDP"
+  )
+```
+
+We continue by building the rest of the world dataset.
+```{r ROW data preparation}
+#We import all of the datasets we will use to compute the dependent variable and the predictors for the rest of the world
+
+dataROWCO2 <-
+  fread(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/ClimateWatchROWCO2.csv",
+    header = TRUE
+  )
+
+dataROWCO2 <- as.matrix(dataROWCO2)
+
+dataROWGDP <-
+  read_excel(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/EuromonitorROWGDP.xlsx",
+    range = "A6:AI689"
+  )
+
+dataROWPopulation <-
+  read_excel(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/EuromonitorROWPopulation.xlsx",
+    range = "A6:AH216"
+  )
+
+dataROWPopulation <- as.matrix(dataROWPopulation)
+
+dataROWEnergyMix <-
+  fread(
+    "/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/OWIDEnergyMix.csv"
+  )
+
+dataUSCPI <-
+  fread("/Users/enrico/Documents/Universita/Bocconi Bachelor/Tesi/ActualData/OECDUSCPI.csv")
+
+dataUSCPI$Value <- as.numeric(dataUSCPI$Value)
+
+#This is the set of countries we will use to create our Synthetic BC
+
+
+countriesEuro <-
+  c(
+    "Japan",
+    "Mexico",
+    "New Zealand",
+    "South Africa",
+    "Turkey",
+    "USA",
+    "Algeria",
+    "Saudi Arabia",
+    "Brazil",
+    "Egypt",
+    "Iran",
+    "Philippines",
+    "Indonesia"
+    )
+
+countries <-
+  c(
+    "Japan",
+    "Mexico",
+    "New Zealand",
+    "South Africa",
+    "Turkey",
+    "United States",
+    "Algeria",
+    "Saudi Arabia",
+    "Brazil",
+    "Egypt",
+    "Iran",
+    "Philippines",
+    "Indonesia"
+    )
+
+#We filter the Energy Mix dataset to only include the years relevant to our analysis
+
+dataROWEnergyMix <-
+  dataROWEnergyMix[dataROWEnergyMix$Year > 1989 &
+                     dataROWEnergyMix$Year < 2019]
+
+#We create the Rest Of the World dataframe
+
+ROW <- matrix(nrow = 0, ncol = 8)
+for (c in 1:length(countries)) {
+  for (i in 1:29) {
+    
+    #We put the country in the first column
+    ROWtemp = countries[c]
+    
+    #We put the country's numeric identifier in the second column (the +1 is because BC is assigned to 1)
+    ROWtemp = append(ROWtemp, c + 1)
+                     
+    #We put the year in the third column
+    ROWtemp = append(ROWtemp, 1989 + i)
+    
+    #We take the GDP of the year and country in question
+    GDPtemp = dataROWGDP[dataROWGDP$Geography == countriesEuro[c], 6 + i]
+    
+    GDPtemp = as.matrix(GDPtemp)
+    
+    GDPtemp = as.numeric(GDPtemp)
+    
+    #We convert this GDP in 2015 dollar value using the US CPI
+    GDPtemp[2:4] = GDPtemp[2:4] * dataUSCPI$Value[dataUSCPI$TIME == "2015"] /
+      dataUSCPI$Value[dataUSCPI$TIME == 1989 + i]
+    
+    #We take the Population of the country at the year in question
+    POPtemp <-
+      as.numeric(dataROWPopulation[dataROWPopulation[, 1] == countriesEuro[c], 5 +
+                                     i])
+    #We put the carbon intensity in the 4th column
+    ROWtemp = append(ROWtemp,
+                     as.numeric(dataROWCO2[dataROWCO2[, 1] == countries[c]][35 - i]) * 1000 /(GDPtemp[3] + GDPtemp[4]))
+                       
+    #We put the manufacturing GDP over the population in the 5th column
+    ROWtemp = append(ROWtemp, ifelse(is.null(as.numeric((GDPtemp[3] + GDPtemp[4]) /
+                                                          (POPtemp)
+    )), NA, as.numeric((
+      GDPtemp[3] + GDPtemp[4]
+    ) / (POPtemp))))
+    
+    #We put the share of manufacturing GDP over the total in the 6th column
+    ROWtemp = append(ROWtemp, as.numeric((GDPtemp[3] + GDPtemp[4]) * 100 /
+                                           (as.numeric(GDPtemp[2]))))
+    
+    #We put the share of energy produced from low carbon sources in the 7th column
+    ROWtemp = append(ROWtemp, ifelse(
+      is.null(
+        as.numeric(dataROWEnergyMix$`Low-carbon energy (% sub energy)`[dataROWEnergyMix$Entity ==
+                                                                     countries[c] &
+                                                                     dataROWEnergyMix$Year == 1989 + i])
+      ),
+      NA,
+      as.numeric(dataROWEnergyMix$`Low-carbon energy (% sub energy)`[dataROWEnergyMix$Entity ==
+                                                                   countries[c] & dataROWEnergyMix$Year == 1989 + i])
+    ))
+    
+    #We put the Expenditure on R&D as % of GDP in the 8th column
+    ROWtemp = append(ROWtemp, ifelse(is.null(GDPtemp[1]), NA, GDPtemp[1]))
+    
+    ROW<-rbind(ROW,ROWtemp)
+}}
+
+ROW = as.data.frame(ROW)
+
+dimnames(ROW)[[2]] <-
+  c(
+    "Country",
+    "CountryNum",
+    "Year",
+    "CarbonIntensity",
+    "SectorGDPPerCapita",
+    "ShareOfSectorGDP",
+    "ShareOfLowCarbonEnergy",
+    "ShareOfResearchOverGDP"
+  )
+```
+
+We now combine the two datasets into the one we will use in our analysis.
+```{r Full dataset preparation}
+#We combine the BC and the Rest Of the World datasets to form the final one
+Data <- rbind(ROW, BC)
+
+#We convert all the numbers in it in doubles
+Data[, 2:8] <-
+  lapply(Data[, 2:8], function(x)
+    if (is.character(x))
+      as.numeric(x)
+    else
+      x)
+
+#We put BC first
+Data<-arrange(Data, CountryNum)
+```
+
+# Data Exploration
+
+We take a look at the data.
+```{r Data exploration}
+#We plot our predictors and the dependent variable for all the regions in the sample
+ggplot(data = Data) + geom_line(aes(x = Year, y = CarbonIntensity, color =
+                                      Country))
+
+ggplot(data = Data) + geom_line(aes(x = Year, y = SectorGDPPerCapita, color =
+                                      Country))
+
+ggplot(data = Data) + geom_line(aes(x = Year, y = ShareOfSectorGDP, color =
+                                      Country))
+
+ggplot(data = Data) + geom_line(aes(x = Year, y = ShareOfLowCarbonEnergy, color =
+                                      Country))
+
+ggplot(data = Data) + geom_line(aes(x = Year, y = ShareOfResearchOverGDP, color =
+                                      Country))+xlim(1997,2018)
+```
+We plot the BC manufacturing emissions' path against the one for manufacturing GDP
+
+```{r BC manufacturing GDP vs emissions}
+#We collect the emissions data
+BCSectorEmissions <-
+  as.data.frame(((dataBCCO2$CO2eq[dataBCCO2$Category == "Manufacturing Industries" &
+                                    dataBCCO2$Region == "British Columbia" &
+                                    dataBCCO2$Year > 1989 &
+                                    dataBCCO2$Year < 2019] + dataBCCO2$CO2eq[dataBCCO2$Category == "Construction" &
+                                                                               dataBCCO2$Region == "British Columbia" &
+                                                                               dataBCCO2$Year > 1989 &
+                                                                               dataBCCO2$Year < 2019])))
+#We collect the GDP Data
+BCSectorGDP <- as.data.frame(((dataBCGDP$VALUE[dataBCGDP$COORDINATE ==
+                                                 "10.1.58"] + dataBCGDP$VALUE[dataBCGDP$COORDINATE == "10.1.47"])))
+
+#We put them together together with the years to which they refer to
+DataBCEmissionsVSGDP <-
+  cbind(1990:2018, BCSectorEmissions, BCSectorGDP)
+
+#Rename the columns of the new dataframe
+dimnames(DataBCEmissionsVSGDP)[[2]] <-
+  c("Year", "SectorEmissions", "SectorGDP")
+
+#Create some variables that will be useful for the plot
+ylim.prim <- c(3500, 8000)
+
+ylim.sec <- c(15000, 30000)
+
+b <- diff(ylim.prim) / diff(ylim.sec)
+
+a <- ylim.prim[1] - b * ylim.sec[1]
+
+#We make the actual plot
+ggplot(DataBCEmissionsVSGDP, aes(x = Year, y = SectorEmissions)) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  geom_line() +
+  geom_line(aes(y = a + SectorGDP * b), color = "red") +
+  scale_y_continuous("CO2e kt", sec.axis = sec_axis( ~ (. - a) / b, name = "Millions 2015 USD"))
+
+#We save it for Latex's use
+#ggsave(
+#  "BCEmissionsVSGDP.png",
+# width = 20,
+#  height = 10,
+#  units = "cm"
+#)
+```
+
+
+# Creating the Synthetic Control Unit
+
+We now create the synthetic control unit.
+```{r Synth}
+#We prepare the data
+SynthData <-
+  dataprep(
+    foo = Data,
+    predictors = c(
+      "SectorGDPPerCapita",
+      "ShareOfSectorGDP",
+      "ShareOfLowCarbonEnergy"
+    ),
+    dependent = "CarbonIntensity",
+    unit.variable = "CountryNum",
+    unit.names.variable = "Country",
+    time.variable = "Year",
+    treatment.identifier = 1,
+    controls.identifier = c(2:14),
+    time.predictors.prior = c(1990:2007),
+    time.optimize.ssr = c(1990:2007),
+    time.plot = c(1990:2018),
+    special.predictors = list(
+      list(8, 1997:2007, "mean"),
+      list(4, 1995 , "mean"),
+      list(4, 2001  , "mean"),
+      list(4, 2003  , "mean")
+    )
+  )
+
+#We run the Synth process
+Results<-synth(SynthData)
+
+#We print its results
+print(synth.tab(dataprep.res = SynthData, synth.res = Results))
+
+#We plot its results
+path.plot(
+  synth.res = Results,
+  dataprep.res = SynthData,
+  Ylab = "CO2e kt per millions of 2015 USD",
+  tr.intake = 2007
+)
+
+
+
+gaps.plot(synth.res = Results,
+          dataprep.res = SynthData,
+          Ylab = "CO2e kt per millions of 2015 USD of difference",
+          tr.intake=2007)
+
+```
+
+We repeat the process setting 2005 as the end of the pre-intervention period.
+```{r Synth with 2005 end}
+#We prepare the data
+SynthData2 <-
+  dataprep(
+    foo = Data,
+    predictors = c(
+      "SectorGDPPerCapita",
+      "ShareOfSectorGDP",
+      "ShareOfLowCarbonEnergy"
+    ),
+    dependent = "CarbonIntensity",
+    unit.variable = "CountryNum",
+    unit.names.variable = "Country",
+    time.variable = "Year",
+    treatment.identifier = 1,
+    controls.identifier = c(2:14),
+    time.predictors.prior = c(1990:2005),
+    time.optimize.ssr = c(1990:2005),
+    time.plot = c(1990:2018),
+    special.predictors = list(
+      list(8, 1997:2005, "mean"),
+      list(4, 1995 , "mean"),
+      list(4, 2001  , "mean"),
+      list(4, 2003  , "mean")
+      ))
+
+#We run the Synth process
+Results2 <- synth(SynthData2)
+
+#We print its results
+print(synth.tab(dataprep.res = SynthData2, synth.res = Results2))
+
+#We plot its results
+path.plot(
+  synth.res = Results2,
+  dataprep.res = SynthData2,
+  Ylab = "CO2e kt per millions of USD",
+  tr.intake = 2005
+)
+
+
+gaps.plot(synth.res = Results2,
+          dataprep.res = SynthData2,
+          Ylab = "CO2e kt per millions of 2015 USD of difference",
+          tr.intake = 2005)
+
+```
+
+## Placebo Tests
+
+We now run the placebo tests.
+We start with the location one.
+```{r location placebo}
+#We run the location placebo
+ResultsLocation <- generate_placebos(SynthData2, Results2)
+```
+
+
+```{r location placebo results}
+#We plot their result without discarding any region regardless of how big the pre-intervention MSPE is
+plot_placebos(ResultsLocation, discard.extreme = FALSE, ylab="CO2e kt per millions of 2015 USD of difference", xlab="Time")
+
+#We plot their result discarding regions for which the pre-intervention MSPE is 10 times larger than BC's one
+plot_placebos(ResultsLocation,
+              discard.extreme = TRUE,
+              mspe.limit = 10, ylab="CO2e kt per millions of 2015 USD of difference", xlab="Time")
+
+#We plot a comparison of the different countries' pre/post-intervention MSPE ratios
+mspe.plot(ResultsLocation)
+
+#We look at the test's result
+mspe.test(ResultsLocation)
+```
+
+We continue with the loo one.
+```{r loo placebo}
+ResultsPlaceboLOO <- matrix(nrow = 0, ncol = 4)
+
+for (i in 1:14) {
+  #eliminate one country from the vector of controls (if i==14 no country is eliminated as in the previous case)
+  if (i == 14) {
+    controlstemp <- countries
+  }
+  
+  controlstemp <- countries[-i]
+  
+  #We prepare the data
+  SynthDataLOO <-
+    dataprep(
+      foo = Data,
+      predictors = c(
+        "SectorGDPPerCapita",
+        "ShareOfSectorGDP",
+        "ShareOfLowCarbonEnergy"
+      ),
+      dependent = "CarbonIntensity",
+      unit.variable = "CountryNum",
+      unit.names.variable = "Country",
+      time.variable = "Year",
+      treatment.identifier = 1,
+      controls.identifier = controlstemp,
+      time.predictors.prior = c(1990:2005),
+      time.optimize.ssr = c(1990:2005),
+      time.plot = c(1990:2018),
+      special.predictors = list(
+        list(8, 1997:2005, "mean"),
+        list(4, 1995, "mean"),
+        list(4, 2001, "mean"),
+        list(4, 2003, "mean")
+      )
+    )
+  
+  #We run the Synth process
+  ResultsLOO <- synth(SynthDataLOO)
+  
+  #We take out the set of weights from it
+  w <- ResultsLOO$solution.w
+  
+  #We prepare some variables for the next process
+  temp <- rep(0, times = 29)
+  
+  temp2 <- rep(0, times = 29)
+  
+  t = 0
+  
+  #We compute the difference between the synthetic and the BC carbon intensity
+  for (j in 1:13) {
+    if (j == i) {
+      next
+      
+    }
+    
+    t = t + 1
+    
+    temp <-
+      temp + w[t] * Data$CarbonIntensity[Data$CountryNum == j + 1] #rename temp
+  }
+  
+  #We create a matrix that contains the difference computed above year by year and with an indication of which country was removed when it was computed
+  for (j in 1:29) {
+    #We put the year as the first column
+    tempres <- 1989 + j
+    
+    #We put the removed country as the second column
+    tempres <- append(tempres, ifelse(i == 14, "No Country", countries[i]))
+    
+    #We put the difference between the BC and the synthetic BC carbon intensities as the third column
+    tempres <-
+      append(tempres, Data$CarbonIntensity[Data$Country == "British Columbia" &
+                                            Data$Year == 1989 + j] - temp[j])
+    
+    #we put the synthetic carbon intensity as the fourth column
+    tempres<-append(tempres, temp[j])
+    ResultsPlaceboLOO <- rbind(ResultsPlaceboLOO, tempres)
+  }
+}
+
+#We turn this into a dataframe
+ResultsPlaceboLOO <- as.data.frame(ResultsPlaceboLOO)
+
+#We rename its columns
+dimnames(ResultsPlaceboLOO)[[2]] <-
+  c("Year",
+    "CountryRemoved",
+    "DifferenceCarbonIntensity",
+    "SyntheticCarbonIntensity")
+
+#We make convert its numeric columns to the double data type
+ResultsPlaceboLOO$Year <- as.numeric(ResultsPlaceboLOO$Year)
+
+ResultsPlaceboLOO$DifferenceCarbonIntensity <-
+  as.numeric(ResultsPlaceboLOO$DifferenceCarbonIntensity)
+
+ResultsPlaceboLOO$SyntheticCarbonIntensity <-
+  as.numeric(ResultsPlaceboLOO$SyntheticCarbonIntensity)
+```
+
+
+
+```{r loo placebo plot}
+#We plot the differences' path for each possible country's removal
+ggplot(data = ResultsPlaceboLOO) + geom_line(aes(x = Year, y = DifferenceCarbonIntensity, color =
+                                                   CountryRemoved)) +     scale_color_manual(
+                                                     values = c(
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#000000",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3",
+                                                       "#D3D3D3"
+                                                     )
+                                                   ) + geom_line(
+                                                     data = subset(ResultsPlaceboLOO, CountryRemoved == "No Country"),
+                                                     aes(x = Year, y = DifferenceCarbonIntensity),
+                                                     color = "#000000"
+                                                   ) + geom_vline(aes(xintercept = 2005), linetype = "dashed") + labs(color = "Removed Country", y =
+                                                                                                                                     "CO2e kt per millions of 2015 USD of difference", x="Time")+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+  
+  
+
+```
+
+We try to run the model with only one lagged variable.
+
+```{r Synth with one lagged}
+#We prepare the data
+SynthDataNoLag <-
+  dataprep(
+    foo = Data,
+    predictors = c(
+      "SectorGDPPerCapita",
+      "ShareOfSectorGDP",
+      "ShareOfLowCarbonEnergy"
+    ),
+    dependent = "CarbonIntensity",
+    unit.variable = "CountryNum",
+    unit.names.variable = "Country",
+    time.variable = "Year",
+    treatment.identifier = 1,
+    controls.identifier = c(2:14),
+    time.predictors.prior = c(1990:2005),
+    time.optimize.ssr = c(1990:2005),
+    time.plot = c(1990:2018),
+    special.predictors = list(list(8, 1997:2005, "mean"), list(4, 2003 , "mean"))
+  )
+
+#We run the Synth process
+ResultsNoLag <- synth(SynthDataNoLag)
+
+#We print its results
+print(synth.tab(dataprep.res = SynthDataNoLag, synth.res = ResultsNoLag))
+
+#We plot its results
+path.plot(
+  synth.res = ResultsNoLag,
+  dataprep.res = SynthDataNoLag,
+  Ylab = "CO2e kt per millions of 2015 USD",
+  tr.intake=2005
+)
+
+
+gaps.plot(synth.res = ResultsNoLag,
+          dataprep.res = SynthDataNoLag,
+          Ylab = "CO2e kt per millions of 2015 USD of difference",
+          tr.intake=2005)
+
+```
+
+# Final Results
+
+We compute some metrics to compare Synthetic BC and BC emissions.
+
+```{r metrics calculation}
+synthetic_emissions_over_gdp <-
+  sum(ResultsPlaceboLOO$SyntheticCarbonIntensity[ResultsPlaceboLOO$Year >
+                                                           2005 & ResultsPlaceboLOO$CountryRemoved == "No Country"])
+
+CO2_total_reduction_over_gdp <-
+  -sum(ResultsPlaceboLOO$DifferenceCarbonIntensity[ResultsPlaceboLOO$Year > 2005 &
+                                          ResultsPlaceboLOO$CountryRemoved == "No Country"])
+
+CO2_average_reduction_over_gdp <-
+  -mean(ResultsPlaceboLOO$DifferenceCarbonIntensity[ResultsPlaceboLOO$Year > 2005 &
+                                          ResultsPlaceboLOO$CountryRemoved == "No Country"])
+
+CO2_percent_reduction_over_gdp <-
+  (CO2_total_reduction_over_gdp / synthetic_emissions_over_gdp) * 100
+
+CO2_last_year_reduction_over_gdp<-    -ResultsPlaceboLOO$DifferenceCarbonIntensity[ResultsPlaceboLOO$Year == 2018 &
+                                        ResultsPlaceboLOO$CountryRemoved == "No Country"]
+
+CO2_last_year_percent_reduction_over_gdp <-
+  (
+    -ResultsPlaceboLOO$DifferenceCarbonIntensity[ResultsPlaceboLOO$Year == 2018 &
+                                        ResultsPlaceboLOO$CountryRemoved == "No Country"] / ResultsPlaceboLOO$SyntheticCarbonIntensity[ResultsPlaceboLOO$Year ==
+                                                                                                                                                 2018 & ResultsPlaceboLOO$CountryRemoved == "No Country"]
+  )*100
+
+
+
+#We print these results
+print(CO2_total_reduction_over_gdp)
+print(CO2_average_reduction_over_gdp)
+print(CO2_percent_reduction_over_gdp)
+print(CO2_last_year_reduction_over_gdp)
+print(CO2_last_year_percent_reduction_over_gdp)
+
+```
+
+Lastly, we clean up our workspace of the variables that won't be needed anymore.
+
+```{r clean-up}
+#We remove all of the data we created as that won't be useful anymore
+remove(
+  BC,
+  dataBCCO2,
+  dataBCEnergyProduction,
+  dataBCPopulation,
+  dataBCGDP,
+  dataROWGDP,
+  dataROWPopulation,
+  dataROWEnergyMix,
+  dataROWCO2,
+  dataUSCPI,
+  ROW,
+  BCCarbonIntensity,
+  BCShareOfLowCarbonEnergy,
+  BCSectorGDPPerCapita,
+  BCShareOfSectorGDP,
+  c,
+  i,
+  year_quarter,
+  dataBCCPI,
+  dataBCEnergyProductionPre,
+  dataBCGDP2018,
+  dataBCGDPPre1997,
+  BCCPItemp,
+  BCShareOfResearchOverGDP,
+  factor,
+  GDPtemp,
+  POPtemp,
+  ROWtemp,
+  years,
+  controlstemp,
+  countries,
+  countriesEuro,
+  j,
+  temp,
+  tempres,
+  w
+)
+```
+
+# Additional Code
+
+The following code creates a plot showing BC's Carbon Intensity trajectory compared to that of each of the countries that are part of the control group's set (+ their unweighted average).
+
+```{r no parallel trend plot preparation}
+#We create the unweighted average of the control group set's countries
+average<-matrix(nrow=0,ncol=8)
+for (i in 1:29){
+  averagetemp<-"Average of countries"
+  averagetemp<-append(averagetemp, 15)
+  averagetemp<-append(averagetemp, 1989+i)
+  averagetemp<-append(averagetemp,mean(Data$CarbonIntensity[Data$Year==1989+i & Data$CountryNum!=1]))
+  averagetemp<-append(averagetemp, mean(Data$SectorGDPPerCapita[Data$Year==1989+i & Data$CountryNum!=1]))
+  averagetemp<-append(averagetemp, mean(Data$ShareOfSectorGDP[Data$Year==1989+i & Data$CountryNum!=1]))
+  averagetemp<-append(averagetemp, mean(Data$ShareOfLowCarbonEnergy[Data$Year==1989+i & Data$CountryNum!=1]))
+  averagetemp<-append(averagetemp, mean(Data$ShareOfResearchOverGDP[Data$Year==1989+i & Data$CountryNum!=1]))
+  average<-rbind(average,averagetemp)
+}
+
+#We turn it into a dataframe
+average = as.data.frame(average)
+
+#We rename its columns to match our previous dataset
+dimnames(average)[[2]] <-
+  c(
+    "Country",
+    "CountryNum",
+    "Year",
+    "CarbonIntensity",
+    "SectorGDPPerCapita",
+    "ShareOfSectorGDP",
+    "ShareOfLowCarbonEnergy",
+    "ShareOfResearchOverGDP"
+  )
+
+#We combine the unweighted average with the rest of the data
+Dataaverage <- rbind(Data, average)
+
+#We convert all the numbers in it in doubles
+Dataaverage[, 2:8] <-
+  lapply(Dataaverage[, 2:8], function(x)
+    if (is.character(x))
+      as.numeric(x)
+    else
+      x)
+```
+
+
+
+```{r no parallel trend plot}
+for (i in 2:15){
+  
+print(ggplot(data = Dataaverage[Dataaverage$CountryNum==i | Dataaverage$CountryNum==1,]) + geom_line(aes(x = Year, y = CarbonIntensity, color =
+                                      Country)))
+  }
+
+```
+
